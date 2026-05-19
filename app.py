@@ -1,23 +1,25 @@
-# Let's rewrite the Streamlit app code to include:
-# 1. An input field for the "Project Name" (Nome do Projeto).
-# 2. A script-based print feature or standard layout that allows exporting/printing the most important data easily.
-# Streamlit doesn't have a native "direct to local printer" button due to browser sandbox security, 
-# but we can implement a clean layout inside a standard button function or a layout optimized for printing (e.g., using a text/markdown area or a st.download_button for a clean text report, or st.button with js for windows.print()).
-# Let's use a standard web printing trick: st.button linked to an HTML/JS print mechanism or a clean st.download_button for a textual report that can be saved/printed instantly. Even better, let's offer a clean text summary inside the app that users can copy/print, or a file download. Let's make a beautiful "Generate Report" download button or view.
+import os
 
-app_code_v4 = """
+# Let's rewrite the Streamlit app code with the requested features:
+# 1. Display total predicted PV production data clearly.
+# 2. Add a visual energy flow breakdown (using a breakdown chart or enhanced visual dataframe/metrics).
+# 3. Add the variable fee for the Anchor Tenant: 1 cent (€0.01) per kWh sold to third parties (neighbors).
+# 4. Integrate a critical analysis section inside the app evaluating if batteries make sense under different scenarios.
+
+app_code_v3 = """
 import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Solar + BESS Financial Model v4", layout="wide")
+st.set_page_config(page_title="Solar + BESS Financial Model v3", layout="wide")
 
 st.title("🔋 Advanced Renewable Energy Investment Tool (Portugal)")
 st.subheader("Solar + BESS Behind-the-Meter & Collective Self-Consumption (ACC)")
 
 st.markdown(\"\"\"
 This application models decentralized energy infrastructure under **Decree-Law 15/2022** and **99/2024**.
-Includes generation forecasting, investment metrics (IRR/NPV), and an automated report generator.
+It includes generation forecasting, dynamic energy destination routing, investment metrics (IRR/NPV), 
+and an automated critical feasibility assessment of the storage system (BESS).
 \"\"\")
 
 # Helper financial functions
@@ -39,16 +41,11 @@ def calculate_irr(cashflows, max_iter=1000):
         r = r_new
     return None
 
-# --- TOP LEVEL PROJECT IDENTIFICATION ---
-st.header("📋 Project Identification")
-project_name = st.text_input("Project Name / Nome do Projeto", value="Project Solar + BESS Alcoutim")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📋 Inputs & Technical Setup", 
-    "📊 Financial Performance", 
+    "📊 Financial Performance (Developer)", 
     "🤝 Anchor Tenant Business Case", 
-    "🧐 BESS Critical Analysis",
-    "🖨️ Export & Print Report"
+    "🧐 BESS Critical Analysis"
 ])
 
 with tab1:
@@ -104,7 +101,8 @@ remaining_for_neighbors = max(0.0, annual_production_mwh - anchor_consumed_mwh -
 neighbors_consumed_mwh = min(remaining_for_neighbors, neighbors_demand)
 spill_mwh = max(0.0, remaining_for_neighbors - neighbors_consumed_mwh)
 
-total_third_party_sales_mwh = neighbors_consumed_mwh
+# Variables for the Anchor Fee logic
+total_third_party_sales_mwh = neighbors_consumed_mwh # Energy sold to surrounding tenants
 total_anchor_variable_fee_revenue = total_third_party_sales_mwh * 1000 * anchor_roof_fee
 
 # Developer Revenues
@@ -118,21 +116,18 @@ rev_neighbors = neighbors_consumed_mwh * 1000 * ppa_neighbors
 rev_spill = spill_mwh * 1000 * market_spill
 
 total_gross_revenue = rev_anchor + rev_bess + rev_neighbors + rev_spill
+# The developer pays out the variable fee to the Anchor Tenant as an extra operational cost
 annual_opex = (total_capex * (opex_pct / 100)) + total_anchor_variable_fee_revenue
 net_annual_cashflow = total_gross_revenue - annual_opex
 
+# Project Cashflows (15 Years)
 cashflows = [-total_capex] + [net_annual_cashflow] * 15
 npv_value = calculate_npv(wacc, cashflows)
 irr_value = calculate_irr(cashflows)
-payback = total_capex / (net_annual_cashflow + 0.1)
-
-# Savings Calculation
-annual_saving_per_kwh = max(0.0, market_retail_price - ppa_anchor)
-annual_anchor_savings = (anchor_consumed_mwh * 1000 * annual_saving_per_kwh) + (bess_allocated_mwh * 1000 * annual_saving_per_kwh * 0.5)
-total_anchor_annual_benefit = annual_anchor_savings + total_anchor_variable_fee_revenue
 
 with tab2:
-    st.header("📊 Developer Financial Performance")
+    st.header("📊 Production Forecast & Energy Destination")
+    
     m1, m2, m3 = st.columns(3)
     m1.metric("Predicted Annual PV Production", f"{annual_production_mwh:,.1f} MWh")
     m2.metric("Total Shared with Neighbors (ACC)", f"{neighbors_consumed_mwh:,.1f} MWh")
@@ -143,92 +138,82 @@ with tab2:
         "Energy Destination": ["Anchor Tenant (Direct)", "Stored in BESS", "Sleeved to Neighbors (ACC)", "Spilled to Grid (Spot)"],
         "MWh per Year": [anchor_consumed_mwh, bess_allocated_mwh, neighbors_consumed_mwh, spill_mwh]
     }).set_index("Energy Destination")
+    
     st.bar_chart(flow_data)
+    
+    st.subheader("💰 Investment Metrics Summary")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total Project CAPEX", f"€{total_capex:,.0f}")
+    k2.metric("Net Annual Cash Flow", f"€{net_annual_cashflow:,.0f}")
+    if irr_value:
+        k3.metric("Project IRR (TIR - 15Y)", f"{irr_value*100:.2f}%")
+    else:
+        k3.metric("Project IRR (TIR)", "N/A")
+    k4.metric(f"Project NPV (VAL @ {wacc*100:.1f}%)", f"€{npv_value:,.0f}")
 
 with tab3:
     st.header("🤝 Anchor Tenant Comprehensive Business Case")
+    
+    annual_saving_per_kwh = max(0.0, market_retail_price - ppa_anchor)
+    annual_anchor_savings = (anchor_consumed_mwh * 1000 * annual_saving_per_kwh) + (bess_allocated_mwh * 1000 * annual_saving_per_kwh * 0.5)
+    total_anchor_annual_benefit = annual_anchor_savings + total_anchor_variable_fee_revenue
+    
     col_a1, col_a2 = st.columns(2)
     col_a1.metric("Year 1 Direct Energy Savings", f"€{annual_anchor_savings:,.0f}")
     col_a2.metric("Year 1 Variable Roof Fee Earned", f"€{total_anchor_variable_fee_revenue:,.0f}")
+    
+    st.subheader("📈 15-Year Cumulative Savings & Fee Income for Anchor Tenant")
+    anchor_years = list(range(1, 16))
+    cum_benefits = []
+    current_benefit = 0
+    for y in anchor_years:
+        # Assuming a 2% energy grid tariff inflation for realism
+        current_benefit += (annual_anchor_savings * (1.02 ** (y - 1))) + total_anchor_variable_fee_revenue
+        cum_benefits.append(current_benefit)
+        
+    st.area_chart(pd.DataFrame({"Year": anchor_years, "Cumulative Financial Benefit (€)": cum_benefits}).set_index("Year"))
 
 with tab4:
     st.header("🧐 Critical Analysis: Does BESS Make Financial Sense?")
+    
+    # Simple mathematical comparison: BESS Cost vs Arbitrage Value
     bess_capex_cost = capex_bess
-    bess_added_annual_revenue = rev_bess - (bess_allocated_mwh * 1000 * market_spill)
+    bess_added_annual_revenue = rev_bess - (bess_allocated_mwh * 1000 * market_spill) # revenue minus what it would make if just spilled directly
     bess_simple_payback = bess_capex_cost / (bess_added_annual_revenue + 0.1) if bess_energy > 0 else 0
-    st.metric("Isolated BESS Payback", f"{bess_simple_payback:.1f} Years" if bess_energy > 0 else "No BESS")
-
-# --- NEW TAB: PRINT / EXPORT REPORT ---
-with tab5:
-    st.header("🖨️ Project Summary Report")
-    st.write("Review the compiled report below. You can save it as a text file or print this web page directly.")
     
-    # Constructing a clean text report layout
-    report_text = f\"\"\"==================================================
-INVESTMENT & VIABILITY REPORT: {project_name.upper()}
-==================================================
-
-[1] PROJECT SUMMARY & IDENTIFICATION
---------------------------------------------------
-* Project Name: {project_name}
-* Grid Connection Level: {voltage_level}
-* Roof Space Evaluated: {roof_size:,} m²
-
-[2] TECHNICAL CONFIGURATION
---------------------------------------------------
-* Proposed Solar PV: {pv_capacity:,} kWp
-* Expected Annual PV Generation: {annual_production_mwh:,.1f} MWh
-* BESS Power Capacity: {bess_power:,} kW
-* BESS Storage Capacity: {bess_energy:,} kWh
-
-[3] DEVELOPER FINANCIAL METRICS (15-YEAR HORIZON)
---------------------------------------------------
-* Total Estimated Project CAPEX: €{total_capex:,.0f}
-* Net Annual Cash Flow: €{net_annual_cashflow:,.0f}
-* Project IRR (TIR): {f'{irr_value*100:.2f}%' if irr_value else 'N/A'}
-* Project NPV (VAL @ {wacc*100:.1f}%): €{npv_value:,.0f}
-* Simple Payback Period: {payback:.1f} Years
-
-[4] COMMERCIAL ENERGY ROUTING & REVENUES
---------------------------------------------------
-* Anchor Tenant Direct Consumption: {anchor_consumed_mwh:,.1f} MWh/yr (Revenue: €{rev_anchor:,.0f}/yr)
-* BESS Optimization Allocation: {bess_allocated_mwh:,.1f} MWh/yr (Revenue: €{rev_bess:,.0f}/yr)
-* Shared with Neighbors (ACC Framework): {neighbors_consumed_mwh:,.1f} MWh/yr (Revenue: €{rev_neighbors:,.0f}/yr)
-* Grid Spill Excess (Spot Market): {spill_mwh:,.1f} MWh/yr (Revenue: €{rev_spill:,.0f}/yr)
-
-[5] ANCHOR TENANT BENEFIT PACKAGE (YEAR 1)
---------------------------------------------------
-* Direct Energy Bill Savings: €{annual_anchor_savings:,.0f}/yr
-* Variable Roof Fee Revenue (€{anchor_roof_fee}/kWh): €{total_anchor_variable_fee_revenue:,.0f}/yr
-* Total Annual Anchor Financial Benefit: €{total_anchor_annual_benefit:,.0f}/yr
-* Cumulative 15-Year Benefit Potential: €{total_anchor_annual_benefit * 15:,.0f}
-
-[6] STORAGE (BESS) AUDIT VERDICT
---------------------------------------------------
-* Standalone BESS CAPEX: €{bess_capex_cost:,.0f}
-* BESS Incremental Revenue: €{bess_added_annual_revenue:,.0f}/yr
-* Isolated Battery Payback: {f'{bess_simple_payback:.1f} Years' if bess_energy > 0 else 'N/A'}
-
-Report compiled automatically by the Solar+BESS ACC Decentrailzed Utility Engine.
-==================================================
-\"\"\"
-    
-    st.text_area("Report Preview", value=report_text, height=450)
-    
-    # Download button for the text report
-    st.download_button(
-        label="💾 Download Clean Report (.txt)",
-        data=report_text,
-        file_name=f"Report_{project_name.replace(' ', '_')}.txt",
-        mime="text/plain"
-    )
-    
+    st.subheader("📊 Battery Storage Financial Breakdown")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Specific BESS CAPEX Allocation", f"€{bess_capex_cost:,.0f}")
+    c2.metric("Additional Annual Revenue from BESS", f"€{bess_added_annual_revenue:,.0f}")
+    if bess_energy > 0:
+        c3.metric("Isolated BESS Payback", f"{bess_simple_payback:.1f} Years")
+    else:
+        c3.metric("Isolated BESS Payback", "No BESS deployed")
+        
     st.markdown(\"\"\"
-    💡 **Tip to Print to PDF:** To print a fully styled report layout, you can simply press **Ctrl + P** (Windows) or **Cmd + P** (Mac) right now in your browser to save this web tab directly to a PDF or physical printer!
+    ### 📝 Qualitative & Regulatory Critical Assessment
+    
+    #### 🟢 When BESS Makes Perfect Sense:
+    1. **High Spread/Volatility in PPAs:** If the difference between the daytime solar capture price and evening peak consumption (ACC or Grid) is greater than **€0.08/kWh**, the arbitrage margin justifies the investment.
+    2. **Grid Injection Constraints:** In Portugal, if E-REDES denies high grid injection capacity, a BESS acts as a 'buffer'. It stores the solar energy that would otherwise be forcedly clipped or wasted, allowing it to be dispatched legally during off-peak solar hours via the ACC framework.
+    3. **Operational Upsell to Anchor:** The battery can be monetized implicitly by offering 'uninterruptible power' (UPS) or *Peak Shaving* services to the Anchor Tenant, boosting contract stickiness.
+    
+    #### 🔴 When BESS is a Financial Drag:
+    1. **High Unitary Cost (>€450/kWh):** If the procurement cost of the storage system is high, the stand-alone payback of the battery stretches past 10-12 years, destroying overall project IRR.
+    2. **High Direct ACC Absorption:** If your surrounding tenants (within 2-4km) consume **100% of the solar surplus in real-time** during the day, the battery is redundant. It is always more profitable to sell a solar kWh directly via an ACC PPA instantly than to store it (due to roundtrip efficiency losses of ~15%).
+    
+    #### ⚖️ Conclusion for this specific Configuration:
     \"\"\")
+    
+    if bess_energy == 0:
+        st.info("De-congested profile: No battery is currently being simulated.")
+    elif bess_simple_payback > 9.5:
+        st.error(f"⚠️ **Red Light:** The standalone battery payback is **{bess_simple_payback:.1f} years**. Under current pricing assumptions, the BESS acts as a financial drag on the developer's IRR. Consider down-sizing the battery or negotiating lower equipment pricing.")
+    else:
+        st.success(f"💚 **Green Light:** The battery payback is **{bess_simple_payback:.1f} years**, which aligns well with a 15-year infrastructure project lifecycle. The BESS enhances project flexibility and locks in evening peak premium revenues.")
 """
 
 with open("app.py", "w", encoding="utf-8") as f:
-    f.write(app_code_v4)
+    f.write(app_code_v3)
 
-print("App code v4 written successfully with project naming and download/print features.")
+print("App code updated with generation metrics, energy flow chart, critical analysis, and variable tenant fee logic.")
